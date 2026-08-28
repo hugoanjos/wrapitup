@@ -1,0 +1,22 @@
+[package]
+name = "wrapitup"
+version = "0.1.0"
+edition = "2024"
+description = "Silently stream a Spotify album/track/playlist so it still counts toward your listening stats"
+
+[dependencies]
+librespot = { version = "0.8.0", default-features = false, features = ["rustls-tls-native-roots"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+futures-util = "0.3"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+dirs = "6"
+rand = "0.8"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+lto = "thin"
+strip = true

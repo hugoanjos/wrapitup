@@ -4,13 +4,19 @@ A terminal app that **plays a Spotify album, track, or playlist with no audio**,
 your listening still counts toward Spotify Wrapped / your monthly capsule while you
 actually listen somewhere else (Apple Music, vinyl, etc.).
 
-It embeds [librespot](https://github.com/librespot-org/librespot) as a real Spotify
-Connect device — it authenticates with your Premium account and streams the genuine
-audio from Spotify's servers (which is what makes a play count), then throws the
-decoded samples away instead of sending them to your speakers. Tracks play their
-full length so timestamps stay realistic.
+It embeds [librespot](https://github.com/librespot-org/librespot) and runs its
+Spotify Connect controller (Spirc), so it registers as a real Connect device named
+**wrapitup**, authenticates with your Premium account, streams the genuine audio
+from Spotify's servers, and reports playback state back to Spotify (which is what
+puts it in Recently Played / your stats). The decoded samples are then dropped
+instead of going to your speakers, paced to real time so track lengths and
+timestamps stay realistic. Autoplay is disabled, so it stops at the end of the
+album/playlist instead of drifting into recommended tracks.
 
-```
+While it's running you'll see "wrapitup" in Spotify's device picker on your other
+devices; you can even steer it from there.
+
+```sh
 wrapitup https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy
 ```
 

@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use librespot::core::{Session, SessionConfig};
 use librespot::core::authentication::Credentials;
 use librespot::core::cache::Cache;
+use librespot::core::{Session, SessionConfig};
 use librespot::oauth::OAuthClientBuilder;
 
 /// Scopes requested during the browser login. `streaming` is the one that matters
@@ -30,34 +30,36 @@ pub fn credentials_file(config_dir: &Path) -> PathBuf {
     config_dir.join("credentials.json")
 }
 
-/// Connect to Spotify, reusing cached credentials when possible and falling back
-/// to a one-time browser OAuth login.
-pub async fn connect(config_dir: &Path, oauth_port: u16) -> Result<Session> {
+/// Obtain Spotify credentials plus the cache they live in. The caller passes both
+/// to `Spirc::new`, which performs the actual session connect and re-saves a
+/// long-lived credential blob into the cache.
+pub async fn credentials(config_dir: &Path, oauth_port: u16) -> Result<(Credentials, Cache)> {
     let cache = Cache::new(Some(config_dir), None::<&Path>, None::<&Path>, None)
         .map_err(|e| anyhow!("opening credential cache: {e}"))?;
 
-    if let Some(creds) = cache.credentials() {
-        let session = Session::new(SessionConfig::default(), Some(cache.clone()));
-        match session.connect(creds, false).await {
-            Ok(()) => {
-                log::info!("authenticated with cached credentials");
-                return Ok(session);
-            }
-            Err(e) => {
-                log::warn!("cached credentials rejected ({e}); starting browser login");
-            }
+    if let Some(cached) = cache.credentials() {
+        if probe(cached.clone()).await {
+            log::info!("using cached Spotify credentials");
+            return Ok((cached, cache));
         }
+        log::warn!("cached credentials rejected; starting browser login");
     }
 
     let token = browser_login(oauth_port).await?;
+    Ok((Credentials::with_access_token(token), cache))
+}
 
-    let session = Session::new(SessionConfig::default(), Some(cache));
-    session
-        .connect(Credentials::with_access_token(token), true)
-        .await
-        .map_err(|e| anyhow!("connecting to Spotify with new credentials: {e}"))?;
-    log::info!("authenticated via browser login; credentials cached");
-    Ok(session)
+/// Cheaply check whether cached credentials still authenticate, on a throwaway
+/// session, so we can fall back to the browser flow before handing them to Spirc.
+async fn probe(creds: Credentials) -> bool {
+    let session = Session::new(SessionConfig::default(), None);
+    match session.connect(creds, false).await {
+        Ok(()) => {
+            session.shutdown();
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 async fn browser_login(oauth_port: u16) -> Result<String> {
@@ -71,8 +73,6 @@ async fn browser_login(oauth_port: u16) -> Result<String> {
 
     println!("Opening your browser to log in to Spotify (one time only)...");
 
-    // `get_access_token` blocks on a local TCP listener, so keep it off the async
-    // executor.
     let token = tokio::task::spawn_blocking(move || client.get_access_token())
         .await
         .context("OAuth task panicked")?

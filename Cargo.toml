@@ -13,7 +13,6 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 dirs = "6"
-rand = "0.8"
 log = "0.4"
 env_logger = "0.11"
 

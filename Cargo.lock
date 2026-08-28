@@ -3871,7 +3871,6 @@ dependencies = [
  "futures-util",
  "librespot",
  "log",
- "rand 0.8.8",
  "ratatui",
  "tokio",
 ]

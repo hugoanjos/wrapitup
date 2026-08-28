@@ -1,17 +1,24 @@
 mod app;
 mod auth;
 mod cli;
-mod resolve;
+mod context;
 mod sink;
 mod ui;
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use librespot::connect::{
+    ConnectConfig, LoadContextOptions, LoadRequest, LoadRequestOptions, Options, Spirc,
+};
+use librespot::core::config::DeviceType;
+use librespot::core::{Session, SessionConfig};
 use librespot::playback::config::PlayerConfig;
-use librespot::playback::mixer::NoOpVolume;
+use librespot::playback::mixer::softmixer::SoftMixer;
+use librespot::playback::mixer::{Mixer, MixerConfig};
 use librespot::playback::player::Player;
 
 #[tokio::main]
@@ -37,22 +44,21 @@ async fn main() -> Result<()> {
         .as_deref()
         .context("no Spotify link given (try `wrapitup --help`)")?;
     let uri = cli::parse_target(target)?;
+    let context_uri = uri.to_uri().map_err(|e| anyhow!("bad Spotify URI: {e}"))?;
 
     println!("Authenticating with Spotify...");
-    let session = auth::connect(&config_dir, cli.oauth_port).await?;
+    let (creds, cache) = auth::credentials(&config_dir, cli.oauth_port).await?;
 
-    let pretty = uri.to_uri().unwrap_or_else(|_| target.to_string());
-    println!("Resolving {pretty}...");
-    let mut resolved = resolve::resolve(&session, &uri).await?;
+    // autoplay off: when the album/playlist ends, don't roll into Spotify's
+    // "autoplay similar songs" and keep racking up plays the user didn't choose.
+    let session_config = SessionConfig {
+        autoplay: Some(false),
+        ..Default::default()
+    };
+    let session = Session::new(session_config, Some(cache));
 
-    if cli.shuffle {
-        use rand::seq::SliceRandom;
-        resolved.tracks.shuffle(&mut rand::thread_rng());
-    }
-
-    println!(
-        "Playing {} track(s) silently. Starting player...",
-        resolved.tracks.len()
+    let mixer: Arc<dyn Mixer> = Arc::new(
+        SoftMixer::open(MixerConfig::default()).map_err(|e| anyhow!("init mixer: {e}"))?,
     );
 
     let player_config = PlayerConfig {
@@ -62,19 +68,50 @@ async fn main() -> Result<()> {
     let player = Player::new(
         player_config,
         session.clone(),
-        Box::new(NoOpVolume),
+        mixer.get_soft_volume(),
         sink::null_sink,
     );
     let events = player.get_player_event_channel();
 
-    let outcome = app::run(
-        resolved.tracks,
-        resolved.context_name,
-        cli.quit_on_finish,
-        player.clone(),
-        events,
-    )
-    .await;
+    let connect_config = ConnectConfig {
+        name: "wrapitup".to_string(),
+        device_type: DeviceType::Computer,
+        ..Default::default()
+    };
+
+    println!("Registering as a Spotify Connect device...");
+    let (spirc, spirc_task) = Spirc::new(connect_config, session.clone(), creds, player, mixer)
+        .await
+        .map_err(|e| anyhow!("starting Spotify Connect: {e}"))?;
+
+    // The session is connected now; fetch a friendly label for the header.
+    let label = context::label(&session, &uri).await.unwrap_or_else(|e| {
+        log::warn!("could not label context: {e}");
+        context_uri.clone()
+    });
+
+    let context_options = cli.shuffle.then(|| {
+        LoadContextOptions::Options(Options {
+            shuffle: true,
+            ..Default::default()
+        })
+    });
+    spirc
+        .activate()
+        .map_err(|e| anyhow!("activating Connect device: {e}"))?;
+    spirc
+        .load(LoadRequest::from_context_uri(
+            context_uri,
+            LoadRequestOptions {
+                start_playing: true,
+                context_options,
+                ..Default::default()
+            },
+        ))
+        .map_err(|e| anyhow!("loading context: {e}"))?;
+    let _ = spirc.play();
+
+    let outcome = app::run(label, cli.quit_on_finish, spirc, spirc_task, events).await;
 
     session.shutdown();
     outcome

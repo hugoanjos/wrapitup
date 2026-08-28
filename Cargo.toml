@@ -16,6 +16,12 @@ dirs = "6"
 log = "0.4"
 env_logger = "0.11"
 
+# Pin only: keeps librespot-core 0.8's build script from getting a `vergen` /
+# `vergen-lib` version mismatch. See build.rs. `cargo install` ignores Cargo.lock,
+# so the constraint has to live here.
+[build-dependencies]
+vergen = "=9.0.6"
+
 [profile.release]
 lto = "thin"
 strip = true
